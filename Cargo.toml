@@ -1,0 +1,23 @@
+[package]
+name    = "ripple-cargo-test"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "ripple-cargo-test"
+path = "src/main.rs"
+
+[dependencies]
+# Path dep during dev — switch to a pinned git rev once ripple's own
+# atomic-* deps move off path. Tracked in plans/ripple.md (trade-offs).
+ripple             = { path = "../ripple" }
+anyhow             = "1"
+tokio              = { version = "1", features = ["rt-multi-thread", "macros"] }
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[profile.release]
+lto       = "thin"
+strip     = true
+codegen-units = 1
