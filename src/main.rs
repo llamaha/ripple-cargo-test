@@ -20,13 +20,7 @@
 
 use ripple::event::EventKind;
 use ripple::Runner;
-use serde_json::json;
 use tracing::info;
-
-/// Trim captured output to the last N bytes before posting. CI run details
-/// are stored in SQLite as JSON; a runaway test suite shouldn't push
-/// megabytes through the API. 64 KiB is enough to see what failed.
-const OUTPUT_TAIL_BYTES: usize = 64 * 1024;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -54,14 +48,8 @@ async fn main() -> anyhow::Result<()> {
             let (ok, output) = checkout.run_capture("cargo test").await?;
             let duration_ms = started.elapsed().as_millis() as u64;
 
-            // Keep the tail — failures show up at the end.
-            let output_tail = if output.len() > OUTPUT_TAIL_BYTES {
-                let start = output.len() - OUTPUT_TAIL_BYTES;
-                format!("…[{} earlier bytes truncated]…\n{}", start, &output[start..])
-            } else {
-                output
-            };
-
+            // attach_log tiers automatically: small logs inline,
+            // larger ones gzip + blob-upload + log_blob reference.
             ctx.report(if ok { "pass" } else { "fail" })
                 .summary(if ok {
                     "cargo test passed"
@@ -69,7 +57,8 @@ async fn main() -> anyhow::Result<()> {
                     "cargo test failed"
                 })
                 .duration_ms(duration_ms)
-                .detail("output", json!(output_tail))
+                .attach_log(&output)
+                .await?
                 .send()
                 .await?;
             Ok(())
