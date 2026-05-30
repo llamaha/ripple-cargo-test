@@ -25,7 +25,12 @@ cargo build --release
 |---------|----------|---------|
 | `PATCHWAVE_URL` | yes | Server base URL, no trailing slash. e.g. `https://patchwave.example` |
 | `PATCHWAVE_TOKEN` | yes | API token. Mint via `POST /api/users/{username}/tokens`. |
-| `PATCHWAVE_RUNNER_NAME` | no | Surfaced as the `details.provider` chip on the CI badge. |
+| `PATCHWAVE_RUNNER_NAME` | no | Surfaced as the `details.provider` chip on the CI badge AND as the row label in patchwave's Runners dashboard. Defaults to the token sub. |
+| `PATCHWAVE_RUNNER_INSTANCE` | no | Stable identifier for this process. Two runners with the same `name` on the same host should set distinct instances. |
+| `PATCHWAVE_RUNNER_VERSION` | no | Override the SDK's compile-time version shown in the dashboard. |
+| `PATCHWAVE_RUNNER_ROLE` | no | Free-form role label shown in the dashboard (e.g. `cargo-test`, `lint`). |
+| `PATCHWAVE_RUNNER_HOSTNAME` | no | Runner-supplied hostname. The server also captures the source IP independently. |
+| `PATCHWAVE_RUNNER_REPOS` | no | Comma-separated `owner/repo` allow-list. Absent = every repo the token can push to. Each entry must already be in the token's access set or the server rejects the connection with 400. |
 | `PATCHWAVE_RUNNER_WORKSPACE` | no | Scratch dir for checkouts. Defaults to `std::env::temp_dir()`. |
 
 The token's user needs push access to every repo the runner is
@@ -38,6 +43,8 @@ access; the runner sees nothing for repos it can't push to.
 export PATCHWAVE_URL=https://patchwave.example
 export PATCHWAVE_TOKEN=pw_...
 export PATCHWAVE_RUNNER_NAME=ripple-cargo-test
+export PATCHWAVE_RUNNER_ROLE=cargo-test          # optional dashboard chip
+export PATCHWAVE_RUNNER_HOSTNAME=$(hostname)     # optional
 ripple-cargo-test
 ```
 
