@@ -21,31 +21,50 @@ cargo build --release
 
 ## Configure
 
-| Env var | Required | Purpose |
-|---------|----------|---------|
-| `PATCHWAVE_URL` | yes | Server base URL, no trailing slash. e.g. `https://patchwave.example` |
-| `PATCHWAVE_TOKEN` | yes | API token. Mint via `POST /api/users/{username}/tokens`. |
-| `PATCHWAVE_RUNNER_NAME` | no | Surfaced as the `details.provider` chip on the CI badge AND as the row label in patchwave's Runners dashboard. Defaults to the token sub. |
-| `PATCHWAVE_RUNNER_INSTANCE` | no | Stable identifier for this process. Two runners with the same `name` on the same host should set distinct instances. |
-| `PATCHWAVE_RUNNER_VERSION` | no | Override the SDK's compile-time version shown in the dashboard. |
-| `PATCHWAVE_RUNNER_ROLE` | no | Free-form role label shown in the dashboard (e.g. `cargo-test`, `lint`). |
-| `PATCHWAVE_RUNNER_HOSTNAME` | no | Runner-supplied hostname. The server also captures the source IP independently. |
-| `PATCHWAVE_RUNNER_REPOS` | no | Comma-separated `owner/repo` allow-list. Absent = every repo the token can push to. Each entry must already be in the token's access set or the server rejects the connection with 400. |
-| `PATCHWAVE_RUNNER_WORKSPACE` | no | Scratch dir for checkouts. Defaults to `std::env::temp_dir()`. |
+Settings live in `config.toml`:
+
+```toml
+server = "https://patchwave.example"
+token  = "pw_..."
+
+# Optional below.
+runner_name     = "ripple-cargo-test"
+runner_instance = "host-a-0"
+runner_version  = "0.1.0"
+runner_role     = "cargo-test"
+runner_hostname = "host-a"
+runner_repos    = ["owner/repo", "owner/other"]
+workspace       = "/var/lib/ripple/work"
+```
+
+| Field | Required | Purpose |
+|-------|----------|---------|
+| `server` | yes | Server base URL, no trailing slash. |
+| `token` | yes | API token. Mint via `POST /api/users/{username}/tokens`. |
+| `runner_name` | no | Surfaced as the `details.provider` chip on the CI badge AND as the row label in patchwave's Runners dashboard. Defaults to the token sub. |
+| `runner_instance` | no | Stable identifier for this process. Two runners with the same `name` on the same host should set distinct instances. |
+| `runner_version` | no | Override the SDK's compile-time version shown in the dashboard. |
+| `runner_role` | no | Free-form role label shown in the dashboard (e.g. `cargo-test`, `lint`). |
+| `runner_hostname` | no | Runner-supplied hostname. The server also captures the source IP independently. |
+| `runner_repos` | no | List of `"owner/repo"` strings. Absent = every repo the token can push to. Each entry must already be in the token's access set or the server rejects the connection with 400. |
+| `workspace` | no | Scratch dir for checkouts. Defaults to `std::env::temp_dir()`. |
 
 The token's user needs push access to every repo the runner is
 expected to react to. The server filters the event stream by push
 access; the runner sees nothing for repos it can't push to.
 
+Config-file lookup order:
+1. `--config <path>` CLI flag
+2. `RIPPLE_CONFIG` env var
+3. `./config.toml` in the working dir
+4. `/etc/ripple-cargo-test/config.toml`
+
 ## Run
 
 ```bash
-export PATCHWAVE_URL=https://patchwave.example
-export PATCHWAVE_TOKEN=pw_...
-export PATCHWAVE_RUNNER_NAME=ripple-cargo-test
-export PATCHWAVE_RUNNER_ROLE=cargo-test          # optional dashboard chip
-export PATCHWAVE_RUNNER_HOSTNAME=$(hostname)     # optional
-ripple-cargo-test
+ripple-cargo-test                          # uses ./config.toml or /etc/...
+ripple-cargo-test --config /etc/r.toml     # explicit path
+RIPPLE_CONFIG=/etc/r.toml ripple-cargo-test
 ```
 
 It runs forever. Reconnects on transport error with exponential
@@ -55,7 +74,7 @@ want supervision.
 ## What it does on each tagged release
 
 1. SSE event arrives: `{kind: "tag.created", owner, repo, payload: {name, state_hash, view}}`.
-2. Clone the repo into a scratch dir under `PATCHWAVE_RUNNER_WORKSPACE` (or `/tmp`).
+2. Clone the repo into a scratch dir under `workspace` (or `/tmp`).
 3. `cd` into the checkout, run `cargo test --quiet`.
 4. POST `/api/ci/{state_hash}/result` with `status: "pass" | "fail"`,
    `details.summary`, `details.duration_ms`, and (if `PATCHWAVE_RUNNER_NAME` is set) `details.provider`.

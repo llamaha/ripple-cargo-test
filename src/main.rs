@@ -15,43 +15,104 @@
 //!   advances the pipeline to the next stage (or marks the tag
 //!   passed/failed) without any further runner cooperation.
 //!
-//! ## Run it
+//! ## Configure
 //!
-//! ```bash
-//! export PATCHWAVE_URL=https://your-server.example
-//! export PATCHWAVE_TOKEN=...        # mint via POST /api/users/{u}/tokens
-//! export PATCHWAVE_RUNNER_NAME=ripple-cargo-test
-//! cargo run --release
+//! Settings live in a `config.toml`:
+//!
+//! ```toml
+//! server = "https://patchwave.example.com"
+//! token  = "pw_..."
+//!
+//! # All of the following are optional.
+//! runner_name     = "ripple-cargo-test"
+//! runner_instance = "host-a-0"
+//! runner_version  = "0.1.0"
+//! runner_role     = "cargo-test"
+//! runner_hostname = "host-a"
+//! runner_repos    = ["root/cargo-smoke"]
+//! workspace       = "/var/lib/ripple/work"
 //! ```
 //!
-//! ## Smoke test the stage pipeline
-//!
-//! With the runner up:
-//!
-//! ```bash
-//! # 1. Configure three stages on the target repo (any sse:// URL — the
-//! #    scheme is the only thing that matters).
-//! for s in docs test deploy; do
-//!   curl -X POST "$PATCHWAVE_URL/api/repos/$OWNER/$REPO/ci-stages" \
-//!     -H "Authorization: Bearer $PATCHWAVE_TOKEN" \
-//!     -H 'Content-Type: application/json' \
-//!     -d "{\"name\":\"$s\",\"webhook_url\":\"sse://ripple\"}"
-//! done
-//!
-//! # 2. Create a tag — this fires stage 1 (`docs`). The runner picks
-//! #    it off the SSE stream, reports back, and the server walks the
-//! #    pipeline forward.
-//! curl -X POST "$PATCHWAVE_URL/api/repos/$OWNER/$REPO/tags" \
-//!   -H "Authorization: Bearer $PATCHWAVE_TOKEN" \
-//!   -H 'Content-Type: application/json' \
-//!   -d '{"name":"v0.1.0","view":"dev","run_ci":true}'
-//!
-//! # 3. Watch the Tags tab — three per-stage badges flip in order.
-//! ```
+//! The runner picks the config file in this order:
+//! 1. `--config <path>` CLI flag,
+//! 2. `RIPPLE_CONFIG` env var,
+//! 3. `./config.toml` in the current dir,
+//! 4. `/etc/ripple-cargo-test/config.toml`.
 
+use ripple::config::Config;
 use ripple::event::EventKind;
 use ripple::Runner;
+use serde::Deserialize;
+use std::path::{Path, PathBuf};
 use tracing::{info, warn};
+
+/// Wire shape of `config.toml`. Mirrors [`ripple::config::Config`] but
+/// every field is plain `Option<String>` / friendly types so a missing
+/// key in the file is just `None` rather than a parse error.
+#[derive(Debug, Deserialize)]
+struct FileConfig {
+    server: String,
+    token: String,
+    runner_name: Option<String>,
+    runner_instance: Option<String>,
+    runner_version: Option<String>,
+    runner_role: Option<String>,
+    runner_hostname: Option<String>,
+    runner_repos: Option<Vec<String>>,
+    workspace: Option<PathBuf>,
+}
+
+impl FileConfig {
+    fn into_config(self) -> Config {
+        Config {
+            server: self.server.trim_end_matches('/').to_string(),
+            token: self.token,
+            runner_name: self.runner_name,
+            runner_instance: self.runner_instance,
+            runner_version: self
+                .runner_version
+                .or_else(|| Some(env!("CARGO_PKG_VERSION").to_string())),
+            runner_role: self.runner_role,
+            runner_hostname: self.runner_hostname,
+            runner_repos: self.runner_repos,
+            workspace: self.workspace.unwrap_or_else(std::env::temp_dir),
+        }
+    }
+}
+
+/// Resolve the config-file path using the documented precedence.
+fn resolve_config_path() -> anyhow::Result<PathBuf> {
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == "--config" {
+            let path = args
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("--config requires a path"))?;
+            return Ok(PathBuf::from(path));
+        }
+        if let Some(rest) = arg.strip_prefix("--config=") {
+            return Ok(PathBuf::from(rest));
+        }
+    }
+    if let Ok(path) = std::env::var("RIPPLE_CONFIG") {
+        return Ok(PathBuf::from(path));
+    }
+    let cwd_path = Path::new("config.toml");
+    if cwd_path.exists() {
+        return Ok(cwd_path.to_path_buf());
+    }
+    Ok(PathBuf::from("/etc/ripple-cargo-test/config.toml"))
+}
+
+fn load_config() -> anyhow::Result<Config> {
+    let path = resolve_config_path()?;
+    let body = std::fs::read_to_string(&path)
+        .map_err(|e| anyhow::anyhow!("reading {}: {e}", path.display()))?;
+    let file: FileConfig = toml::from_str(&body)
+        .map_err(|e| anyhow::anyhow!("parsing {}: {e}", path.display()))?;
+    info!(config = %path.display(), "loaded config");
+    Ok(file.into_config())
+}
 
 /// Map a stage name to the shell command the runner will execute.
 /// Unknown stage names fall back to a no-op `echo` so the pipeline
@@ -79,7 +140,9 @@ async fn main() -> anyhow::Result<()> {
 
     info!("ripple-cargo-test starting");
 
-    Runner::from_env()?
+    let cfg = load_config()?;
+
+    Runner::from_config(cfg)?
         .on(EventKind::ChangePushed, |ctx| async move {
             let checkout = ctx.checkout().await?;
             info!(
